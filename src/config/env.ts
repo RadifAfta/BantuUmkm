@@ -13,6 +13,15 @@ const envSchema = z.object({
   GROQ_API_KEY: z.string({
     required_error: 'GROQ_API_KEY wajib diisi di .env!',
   }).min(1, 'GROQ_API_KEY tidak boleh kosong!'),
+  GOOGLE_SERVICE_ACCOUNT_EMAIL: z.string({
+    required_error: 'GOOGLE_SERVICE_ACCOUNT_EMAIL wajib diisi di .env!',
+  }).min(1, 'GOOGLE_SERVICE_ACCOUNT_EMAIL tidak boleh kosong!'),
+  GOOGLE_PRIVATE_KEY: z.string({
+    required_error: 'GOOGLE_PRIVATE_KEY wajib diisi di .env!',
+  }).min(1, 'GOOGLE_PRIVATE_KEY tidak boleh kosong!'),
+  GOOGLE_SPREADSHEET_ID: z.string({
+    required_error: 'GOOGLE_SPREADSHEET_ID wajib diisi di .env!',
+  }).min(1, 'GOOGLE_SPREADSHEET_ID tidak boleh kosong!'),
 });
 
 // Fungsi untuk memvalidasi dan mem-parsing process.env

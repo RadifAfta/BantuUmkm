@@ -2,6 +2,7 @@ import { Worker, Job } from 'bullmq';
 import redisConnection from '../config/redis';
 import { WHATSAPP_QUEUE_NAME } from './whatsapp.queue';
 import { extractOrderFromChat } from '../services/ai.service';
+import { appendOrderToSheet } from '../services/sheets.service';
 
 // Definisikan bentuk interface data yang ditangani oleh Job
 interface ChatJobData {
@@ -23,7 +24,11 @@ export const whatsappWorker = new Worker<ChatJobData>(
     
     console.log(`👷 [Worker] Hasil Rekap AI (Structured JSON):`);
     console.log(JSON.stringify(extractedOrder, null, 2));
-    console.log(`👷 [Worker] Analisis AI selesai untuk job #${job.id}.\n`);
+    
+    // Kirim data hasil ekstraksi ke Google Sheets API secara asinkronus
+    await appendOrderToSheet(extractedOrder);
+    
+    console.log(`👷 [Worker] Analisis AI & sinkronisasi Google Sheets selesai untuk job #${job.id}.\n`);
   },
   {
     connection: redisConnection,
