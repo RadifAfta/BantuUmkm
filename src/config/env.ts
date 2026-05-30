@@ -10,6 +10,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   REDIS_HOST: z.string().default('127.0.0.1'),
   REDIS_PORT: z.coerce.number().default(6379),
+  GROQ_API_KEY: z.string({
+    required_error: 'GROQ_API_KEY wajib diisi di .env!',
+  }).min(1, 'GROQ_API_KEY tidak boleh kosong!'),
 });
 
 // Fungsi untuk memvalidasi dan mem-parsing process.env

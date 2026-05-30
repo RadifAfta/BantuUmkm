@@ -1,6 +1,7 @@
 import { Worker, Job } from 'bullmq';
 import redisConnection from '../config/redis';
 import { WHATSAPP_QUEUE_NAME } from './whatsapp.queue';
+import { extractOrderFromChat } from '../services/ai.service';
 
 // Definisikan bentuk interface data yang ditangani oleh Job
 interface ChatJobData {
@@ -14,13 +15,15 @@ export const whatsappWorker = new Worker<ChatJobData>(
   async (job: Job<ChatJobData>) => {
     const { sender, message } = job.data;
 
-    console.log(`👷 [Worker] Mulai memproses job #${job.id} dari pengirim: ${sender}`);
-    console.log(`👷 [Worker] Sedang memproses antrean chat dari ${sender}...`);
+    console.log(`\n👷 [Worker] Mulai memproses job #${job.id} dari pengirim: ${sender}`);
+    console.log(`👷 [Worker] Sedang menganalisis chat dengan AI Groq...`);
     
-    // Simulasi proses asinkronus berat (misal: panggil OpenAI API) selama 1.5 detik
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Panggil AI Service untuk mengekstraksi pesanan terstruktur secara asinkronus
+    const extractedOrder = await extractOrderFromChat(message);
     
-    // Catatan: Di Fase berikutnya, logika OpenAI dan Google Sheets akan dimasukkan di sini.
+    console.log(`👷 [Worker] Hasil Rekap AI (Structured JSON):`);
+    console.log(JSON.stringify(extractedOrder, null, 2));
+    console.log(`👷 [Worker] Analisis AI selesai untuk job #${job.id}.\n`);
   },
   {
     connection: redisConnection,

@@ -1,0 +1,93 @@
+{
+	"info": {
+		"_postman_id": "8b5f36e4-4d87-4a04-9a3d-b2bfa67e0e7a",
+		"name": "AI-Powered Workflow Automator",
+		"description": "Postman Collection untuk menguji API AI-Powered Workflow Automator untuk UMKM.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "http://localhost:5000/api/health",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "5000",
+					"path": [
+						"api",
+						"health"
+					]
+				},
+				"description": "Endpoint untuk memantau status kesehatan web server."
+			},
+			"response": []
+		},
+		{
+			"name": "WhatsApp Webhook - Sukses (Ekstraksi AI)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"sender\": \"081299887766\",\n    \"message\": \"Halo gan, sy mau pesen sate kambing 5 tusuk, terus bakso uratnya 2 porsi sama es teh manis 3 gelas yaa. Kirim ke Jl. Melati Raya No. 45 Blok B, atas nama Bapak Joko. No hp: 081299887766\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:5000/api/webhook",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "5000",
+					"path": [
+						"api",
+						"webhook"
+					]
+				},
+				"description": "Menerima payload WhatsApp chat, memvalidasi data dengan Zod, dan mengantrekannya ke Redis untuk diekstrak asinkronus oleh AI Groq (LLaMA 3.1)."
+			},
+			"response": []
+		},
+		{
+			"name": "WhatsApp Webhook - Gagal Validasi Zod",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"sender\": \"081299887766\"\n}"
+				},
+				"url": {
+					"raw": "http://localhost:5000/api/webhook",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "5000",
+					"path": [
+						"api",
+						"webhook"
+					]
+				},
+				"description": "Menguji penanganan error ketika parameter wajib 'message' dihilangkan."
+			},
+			"response": []
+		}
+	]
+}
