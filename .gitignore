@@ -44,3 +44,6 @@ coverage/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# WhatsApp Web JS Auth Session
+.wwebjs_auth/

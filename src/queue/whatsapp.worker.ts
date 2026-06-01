@@ -3,6 +3,7 @@ import redisConnection from '../config/redis';
 import { WHATSAPP_QUEUE_NAME } from './whatsapp.queue';
 import { extractOrderFromChat } from '../services/ai.service';
 import { appendOrderToSheet } from '../services/sheets.service';
+import client from '../config/whatsapp';
 
 // Definisikan bentuk interface data yang ditangani oleh Job
 interface ChatJobData {
@@ -27,6 +28,20 @@ export const whatsappWorker = new Worker<ChatJobData>(
     
     // Kirim data hasil ekstraksi ke Google Sheets API secara asinkronus
     await appendOrderToSheet(extractedOrder);
+
+    // Kirimkan pesan konfirmasi otomatis ke nomor pengirim menggunakan whatsapp-web.js
+    try {
+      console.log(`💬 [Worker] Mengirim chat konfirmasi otomatis ke ${sender}...`);
+      
+      const pembeli = extractedOrder.nama_pembeli || 'Pelanggan';
+      const replyText = `Halo! Pesanan kamu atas nama *${pembeli}* sudah berhasil direkap otomatis ke Google Sheets toko kami. Terima kasih! 😊`;
+      
+      await client.sendMessage(sender, replyText);
+      console.log(`✅ [Worker] Chat konfirmasi sukses terkirim ke ${sender}.`);
+    } catch (replyError: any) {
+      // Catatan: Kegagalan mengirim balasan WA tidak kita throw agar status job utama (AI & Google Sheets) tetap sukses.
+      console.error(`❌ [Worker] Gagal mengirim chat konfirmasi otomatis ke ${sender}:`, replyError.message || replyError);
+    }
     
     console.log(`👷 [Worker] Analisis AI & sinkronisasi Google Sheets selesai untuk job #${job.id}.\n`);
   },
