@@ -61,7 +61,7 @@ client.on('message_create', async (msg: any) => {
   const isPersonalChat = msg.from.endsWith('@c.us') || msg.from.endsWith('@lid');
   if (isPersonalChat) {
     // 1. Cegah infinite loop dengan mengabaikan pesan balasan otomatis dari bot kita sendiri
-    const isAutomatedReply = msg.body.startsWith('Halo! Pesanan kamu');
+    const isAutomatedReply = msg.body.startsWith('🤖') || msg.body.startsWith('Halo! Pesanan kamu');
     if (isAutomatedReply) {
       console.log('   ℹ️ Mengabaikan pesan balasan otomatis untuk mencegah loop.');
       return;
@@ -71,9 +71,8 @@ client.on('message_create', async (msg: any) => {
     // Skenario pesan masuk dari orang lain selalu memiliki 'fromMe: false'
     const isIncoming = !msg.fromMe;
     
-    // Untuk mempermudah pengujian, kita juga mengizinkan jika pesan dikirim dari akun kita sendiri ke nomor kita sendiri (Self-Chat)
-    // Jika self-chat, pengirim atau penerima biasanya adalah nomor kita sendiri
-    const isSelfChat = msg.fromMe && (msg.to === msg.from || msg.to.endsWith('@lid') || msg.to.endsWith('@c.us'));
+    // Untuk mempermudah pengujian, kita mengizinkan pesan dikirim dari akun kita sendiri (simulasi testing)
+    const isSelfChat = msg.fromMe;
 
     if (isIncoming || isSelfChat) {
       const sender = isSelfChat ? msg.to : msg.from; // Tetapkan pengirim dengan tepat

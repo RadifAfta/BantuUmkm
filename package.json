@@ -18,6 +18,7 @@
     "express": "^4.19.2",
     "googleapis": "^173.0.0",
     "groq-sdk": "^1.2.1",
+    "ioredis": "^5.11.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
     "zod": "^3.23.8"
@@ -25,6 +26,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/ioredis": "^4.28.10",
     "@types/node": "^20.12.12",
     "nodemon": "^3.1.2",
     "ts-node": "^10.9.2",
