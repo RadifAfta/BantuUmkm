@@ -1,11 +1,12 @@
 import Redis from 'ioredis';
 import { env } from '../config/env';
-import { ExtractedOrder } from './ai.service';
+import { ExtractedOrder, ChatMessage } from './ai.service';
 
-// Interface untuk data sesi status pemesanan
+// Interface untuk data sesi status pemesanan dan riwayat obrolan
 export interface OrderSession {
-  step: 'AWAITING_NAME' | 'AWAITING_ADDRESS';
-  order: ExtractedOrder;
+  step: 'IDLE' | 'AWAITING_NAME' | 'AWAITING_ADDRESS' | 'AWAITING_CONFIRMATION';
+  order?: ExtractedOrder;
+  history: ChatMessage[];
 }
 
 /**

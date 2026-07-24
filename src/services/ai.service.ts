@@ -6,8 +6,13 @@ const groq = new Groq({
   apiKey: env.GROQ_API_KEY,
 });
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 // Tipe Niat (Intent) pesan WhatsApp masuk
-export type IntentType = 'ORDER' | 'INQUIRY' | 'COMPLAINT' | 'OTHER';
+export type IntentType = 'ORDER' | 'INQUIRY' | 'COMPLAINT' | 'CONFIRM' | 'CANCEL' | 'OTHER';
 
 // Interface untuk respons deteksi intent
 export interface IntentResult {
@@ -32,11 +37,13 @@ export interface ExtractedOrder {
 /**
  * Service untuk mendeteksi niat (intent) dari chat pelanggan WhatsApp.
  */
-export const classifyIntent = async (message: string): Promise<IntentType> => {
+export const classifyIntent = async (message: string, history: ChatMessage[] = []): Promise<IntentType> => {
   try {
     const systemPrompt = `Kamu adalah AI Router cerdas yang bertugas mengklasifikasi kategori pesan dari pelanggan toko online UMKM.
 Tentukan kategori pesan dari daftar berikut:
-- ORDER: Jika pesan berisi niat untuk membeli produk, memesan makanan/barang, atau menanyakan total tagihan belanjaan mereka. Contoh: "mau beli sate kambing 2", "pesen nasi goreng satu", "rekap sate ayam 5 porsi".
+- CONFIRM: Jika pesan berisi konfirmasi setuju, mengiyakan rekap pesanan, atau konfirmasi "Ya" / "Oke" / "Benar" terhadap rekap belanjaan sebelumnya. Contoh: "ya", "oke", "benar", "betul kak", "ya pesanan saya sudah benar", "ok".
+- CANCEL: Jika pesan berisi keinginan membatalkan pesanan atau menghapus seluruh sesi pesanan. Contoh: "batalin aja", "batal", "cancel pesanan saya", "gak jadi beli deh".
+- ORDER: Jika pesan berisi niat untuk membeli produk baru, menambah menu, mengubah jumlah pesanan, memesan makanan/barang, atau menanyakan total tagihan belanjaan mereka. Contoh: "mau beli sate kambing 2", "pesen nasi goreng satu", "tambah sate 1 lagi kak", "ganti jadi bakso aja".
 - INQUIRY: Jika pesan berisi pertanyaan umum tentang harga barang, daftar menu/katalog, jam buka toko, ketersediaan stok produk, atau lokasi fisik toko. Contoh: "sate porsinya berapa ya?", "buka jam berapa kak?", "menu sate kambing ready?", "ada rasa apa aja?".
 - COMPLAINT: Jika pesan berisi komplain, protes barang rusak/kurang, keluhan keterlambatan pengiriman, atau permintaan refund. Contoh: "kok pesanan saya belum sampai ya?", "makanan kemarin rasanya kurang enak, tolong perbaiki".
 - OTHER: Jika pesan hanya berisi salam pembuka (halo, p, pagi, siang), basa-basi, ucapan terima kasih, atau teks acak yang tidak jelas tujuannya.
@@ -44,22 +51,28 @@ Tentukan kategori pesan dari daftar berikut:
 Kamu WAJIB mengembalikan respon HANYA berupa objek JSON mentah yang valid, tanpa teks basa-basi, tanpa tanda backticks (\`\`\`json), dan tanpa penjelasan apa pun.
 Struktur JSON yang wajib kamu kembalikan harus memiliki key berikut:
 {
-  "intent": "ORDER" | "INQUIRY" | "COMPLAINT" | "OTHER",
+  "intent": "ORDER" | "INQUIRY" | "COMPLAINT" | "CONFIRM" | "CANCEL" | "OTHER",
   "explanation": "alasan singkat klasifikasi dalam bahasa indonesia"
 }`;
 
+    const formattedMessages = [
+      {
+        role: 'system' as const,
+        content: systemPrompt,
+      },
+      ...history.map((msg) => ({
+        role: (msg.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: msg.content,
+      })),
+      {
+        role: 'user' as const,
+        content: message,
+      },
+    ];
+
     const response = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: message,
-        },
-      ],
+      messages: formattedMessages,
       response_format: {
         type: 'json_object',
       },
@@ -78,7 +91,7 @@ Struktur JSON yang wajib kamu kembalikan harus memiliki key berikut:
 /**
  * Service untuk menjawab pertanyaan umum pelanggan (INQUIRY / FAQ) secara ramah & kontekstual berdasarkan katalog produk aktif.
  */
-export const answerInquiry = async (message: string, catalogContext: string): Promise<string> => {
+export const answerInquiry = async (message: string, catalogContext: string, history: ChatMessage[] = []): Promise<string> => {
   try {
     const systemPrompt = `Kamu adalah Customer Service AI yang ramah, sopan, dan profesional untuk toko online UMKM.
 Tugasmu adalah menjawab pertanyaan pelanggan (Inquiry/FAQ) secara singkat, jelas, dan membantu berdasarkan konteks katalog produk berikut:
@@ -97,18 +110,24 @@ Aturan Keamanan & Komunikasi:
 - Jika menanyakan produk yang tidak ada di katalog, katakan dengan sopan bahwa produk tersebut saat ini belum tersedia.
 - Jangan memberikan jawaban yang terlalu panjang atau bertele-tele. Maksimal 3-4 kalimat. Akhiri dengan emotikon yang ramah.`;
 
+    const formattedMessages = [
+      {
+        role: 'system' as const,
+        content: systemPrompt,
+      },
+      ...history.map((msg) => ({
+        role: (msg.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: msg.content,
+      })),
+      {
+        role: 'user' as const,
+        content: message,
+      },
+    ];
+
     const response = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: message,
-        },
-      ],
+      messages: formattedMessages,
       temperature: 0.4,
     });
 
@@ -122,13 +141,22 @@ Aturan Keamanan & Komunikasi:
 /**
  * Service untuk mengekstrak pesanan terstruktur dari pesan chat WhatsApp dengan validasi katalog produk resmi.
  */
-export const extractOrderFromChat = async (message: string, catalogContext: string): Promise<ExtractedOrder> => {
+export const extractOrderFromChat = async (
+  message: string,
+  catalogContext: string,
+  history: ChatMessage[] = [],
+  currentOrder?: ExtractedOrder
+): Promise<ExtractedOrder> => {
   try {
+    const currentOrderContext = currentOrder && currentOrder.pesanan.length > 0
+      ? `\nPesanan Aktif Saat Ini yang Sedang Berjalan:\n${JSON.stringify(currentOrder, null, 2)}\n`
+      : '';
+
     const systemPrompt = `Kamu adalah sistem kecerdasan buatan untuk rekap otomatis toko online. Tugasmu adalah mengekstrak teks chat pesanan yang berantakan menjadi data JSON yang bersih, terstruktur, dan tervalidasi terhadap Katalog Produk resmi.
 
 Katalog Produk Resmi Toko Kami:
 ${catalogContext}
-
+${currentOrderContext}
 Tugasmu:
 1. Ekstrak nama pembeli, nomor HP (jika disebutkan dalam chat), pesanan produk, dan alamat pengiriman.
 2. Setiap produk yang dipesan pembeli wajib dicocokkan (fuzzy match) dengan Nama Produk yang ada di Katalog Produk Resmi di atas. JANGAN gunakan nama produk di luar katalog jika tidak ada kemiripan yang masuk akal.
@@ -139,29 +167,36 @@ Tugasmu:
    - subtotal: Hasil kali dari jumlah dan harga_satuan (harus berupa angka/number).
 4. Hitung total_harga: Jumlah akumulasi dari seluruh subtotal pesanan (harus berupa angka/number).
 5. Jika pembeli memesan sesuatu yang sama sekali tidak ada di Katalog, abaikan item tersebut dan jangan masukkan ke dalam array 'pesanan'.
-6. JIKA di dalam chat pengirim TIDAK menyebutkan menu/produk yang ingin dipesan secara jelas (atau hanya berisi teks tambahan seperti "ada tambahan lagi", "tambah lagi kak" tanpa detail menu), maka kamu WAJIB mengembalikan array 'pesanan' kosong [] dan total_harga 0. JANGAN PERNAH mengarang (halusinasi) nama produk, nama pembeli, nomor HP, atau alamat pengiriman jika informasi tersebut tidak ada pada chat pengirim.
+6. JIKA di dalam chat pengirim TIDAK menyebutkan menu/produk yang ingin dipesan secara jelas (atau hanya berisi teks tambahan seperti "ada tambahan lagi", "tambah lagi kak" tanpa detail menu), maka kamu WAJIB mengembalikan array 'pesanan' kosong [] dan total_harga 0 (kecuali jika ada Pesanan Aktif Saat Ini yang ingin ditambahkan). JANGAN PERNAH mengarang (halusinasi) nama produk, nama pembeli, nomor HP, atau alamat pengiriman jika informasi tersebut tidak ada pada chat pengirim atau Pesanan Aktif Saat Ini.
+7. JIKA ada "Pesanan Aktif Saat Ini" (pada context di atas), dan pelanggan bermaksud menambah, mengurangi, atau mengganti item (contoh: "tambah sate 1 lagi", "ganti bakso jadi 2 porsi"), gabungkan atau perbarui Pesanan Aktif Saat Ini dengan perubahan tersebut dan kembalikan seluruh pesanan yang sudah digabungkan secara lengkap. Tetap pertahankan nama pembeli dan alamat pengiriman dari Pesanan Aktif Saat Ini jika tidak ada informasi baru.
 
 Struktur JSON yang wajib kamu kembalikan:
-- nama_pembeli (string, kosongkan "" jika tidak ada)
-- nomor_hp (string, kosongkan "" jika tidak ada)
+- nama_pembeli (string, gunakan dari Pesanan Aktif jika ada dan tidak diubah, kosongkan "" jika tidak ada)
+- nomor_hp (string, gunakan dari Pesanan Aktif jika ada dan tidak diubah, kosongkan "" jika tidak ada)
 - pesanan (array of object, masing-masing memiliki key: 'nama_produk', 'jumlah', 'harga_satuan', 'subtotal', kosongkan [] jika tidak ada produk cocok)
 - total_harga (number, jumlah dari seluruh subtotal)
-- alamat_pengiriman (string, kosongkan "" jika tidak ada)
+- alamat_pengiriman (string, gunakan dari Pesanan Aktif jika ada dan tidak diubah, kosongkan "" jika tidak ada)
 
 Kamu WAJIB mengembalikan respon HANYA berupa objek JSON mentah yang valid, tanpa teks basa-basi, tanpa tanda backticks (\`\`\`json), dan tanpa penjelasan apa pun.`;
 
+    const formattedMessages = [
+      {
+        role: 'system' as const,
+        content: systemPrompt,
+      },
+      ...history.map((msg) => ({
+        role: (msg.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: msg.content,
+      })),
+      {
+        role: 'user' as const,
+        content: message,
+      },
+    ];
+
     const response = await groq.chat.completions.create({
       model: 'llama-3.1-8b-instant',
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: message,
-        },
-      ],
+      messages: formattedMessages,
       response_format: {
         type: 'json_object',
       },

@@ -1,10 +1,10 @@
 import { Worker, Job } from 'bullmq';
 import redisConnection from '../config/redis';
 import { WHATSAPP_QUEUE_NAME } from './whatsapp.queue';
-import { classifyIntent, extractOrderFromChat, answerInquiry } from '../services/ai.service';
+import { classifyIntent, extractOrderFromChat, answerInquiry, ChatMessage } from '../services/ai.service';
 import { appendOrderToSheet, getCatalogFromSheet } from '../services/sheets.service';
 import { WhatsAppProviderFactory } from '../services/whatsapp-provider.service';
-import { sessionService } from '../services/session.service';
+import { sessionService, OrderSession } from '../services/session.service';
 
 // Definisikan bentuk interface data yang ditangani oleh Job
 interface ChatJobData {
@@ -25,82 +25,28 @@ export const whatsappWorker = new Worker<ChatJobData>(
     console.log(`\n👷 [Worker] Mulai memproses job #${job.id} dari pengirim: ${sender}`);
     
     // ------------------------------------------------------------------------
-    // PERIKSA SESI MULTI-TURN CLARIFICATION AKTIF
+    // AMBIL ATAU INISIALISASI SESI DENGAN RIWAYAT CHAT
     // ------------------------------------------------------------------------
-    const session = await sessionService.getSession(sender);
-    
-    if (session) {
-      console.log(`👷 [Worker] Sesi aktif terdeteksi untuk ${sender} (Langkah: ${session.step})`);
-      
-      if (session.step === 'AWAITING_NAME') {
-        const inputName = message.trim();
-        session.order.nama_pembeli = inputName;
-        
-        // Cek apakah alamat pengiriman juga masih kosong
-        const isAddressMissing = !session.order.alamat_pengiriman || 
-                                 session.order.alamat_pengiriman.trim() === '-' || 
-                                 session.order.alamat_pengiriman.trim() === '';
-                                 
-        if (isAddressMissing) {
-          // Beralih meminta alamat
-          session.step = 'AWAITING_ADDRESS';
-          await sessionService.setSession(sender, session);
-          
-          const replyText = `🤖 Terima kasih, Kak *${inputName}*! Selanjutnya, mohon infokan **Alamat Pengiriman** Kakak ya agar pesanan bisa segera kami rekap. 😊`;
-          await whatsappProvider.sendMessage(sender, replyText);
-          console.log(`👷 [Worker] Sesi diperbarui ke AWAITING_ADDRESS untuk ${sender}`);
-        } else {
-          // Lengkap semua! Tulis ke Google Sheets
-          session.order.nomor_hp = session.order.nomor_hp || cleanSenderPhone;
-          await appendOrderToSheet(session.order);
-          
-          // Kirim nota belanja
-          const detailPesananStr = session.order.pesanan
-            .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
-            .join('\n');
-          
-          let replyText = `🤖 *📋 NOTA PESANAN OTOMATIS* \n\nHalo Kak *${session.order.nama_pembeli}*! Pesanan Kakak telah berhasil direkap otomatis ke Google Sheets toko kami:\n\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${session.order.total_harga.toLocaleString('id-ID')}*\n`;
-          if (session.order.alamat_pengiriman) {
-            replyText += `*📍 Alamat Pengiriman:* ${session.order.alamat_pengiriman}\n`;
-          }
-          replyText += `\nTerima kasih telah berbelanja! Admin kami akan segera menghubungi Kakak untuk konfirmasi pembayaran. 😊`;
-          
-          await whatsappProvider.sendMessage(sender, replyText);
-          await sessionService.deleteSession(sender);
-          console.log(`👷 [Worker] Transaksi sukses diselesaikan & sesi dihapus untuk ${sender}`);
-        }
-        return;
-      }
-      
-      if (session.step === 'AWAITING_ADDRESS') {
-        const inputAddress = message.trim();
-        session.order.alamat_pengiriman = inputAddress;
-        session.order.nomor_hp = session.order.nomor_hp || cleanSenderPhone;
-        
-        // Lengkap semua! Tulis ke Google Sheets
-        await appendOrderToSheet(session.order);
-        
-        // Kirim nota belanja
-        const detailPesananStr = session.order.pesanan
-          .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
-          .join('\n');
-        
-        let replyText = `🤖 *📋 NOTA PESANAN OTOMATIS* \n\nHalo Kak *${session.order.nama_pembeli}*! Pesanan Kakak telah berhasil direkap otomatis ke Google Sheets toko kami:\n\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${session.order.total_harga.toLocaleString('id-ID')}*\n`;
-        replyText += `*📍 Alamat Pengiriman:* ${session.order.alamat_pengiriman}\n`;
-        replyText += `\nTerima kasih telah berbelanja! Admin kami akan segera menghubungi Kakak untuk konfirmasi pembayaran. 😊`;
-        
-        await whatsappProvider.sendMessage(sender, replyText);
-        await sessionService.deleteSession(sender);
-        console.log(`👷 [Worker] Transaksi sukses diselesaikan & sesi dihapus untuk ${sender}`);
-        return;
-      }
+    let session = await sessionService.getSession(sender);
+    if (!session) {
+      session = {
+        step: 'IDLE',
+        history: [],
+      };
     }
 
-    // ------------------------------------------------------------------------
-    // ALUR PERCAKAPAN STANDAR (TIDAK ADA SESI AKTIF)
-    // ------------------------------------------------------------------------
-    console.log(`👷 [Worker] Sedang menganalisis niat (intent) chat dengan AI...`);
-    const intent = await classifyIntent(message);
+    // 1. Simpan pesan pengguna ke riwayat chat
+    session.history.push({ role: 'user', content: message });
+
+    // Batasi panjang riwayat chat (maksimal 6 pesan terakhir) agar hemat token & fokus
+    if (session.history.length > 6) {
+      session.history.shift();
+    }
+
+    console.log(`👷 [Worker] Status Sesi ${sender}: ${session.step}, Riwayat Chat: ${session.history.length} pesan`);
+
+    // 2. Klasifikasi niat dengan riwayat chat
+    const intent = await classifyIntent(message, session.history);
     console.log(`👷 [Worker] Niat terdeteksi: ${intent.toUpperCase()}`);
 
     // Ambil data katalog produk aktif dari Google Sheets
@@ -109,101 +55,226 @@ export const whatsappWorker = new Worker<ChatJobData>(
       .map((item) => `- ${item.nama} (Harga: Rp${item.harga.toLocaleString('id-ID')})`)
       .join('\n');
 
-    // Routing berdasarkan niat
-    if (intent !== 'ORDER') {
-      console.log(`👷 [Worker] Memproses chat NON-ORDER (Niat: ${intent.toUpperCase()})...`);
-      
-      let replyText = '';
+    let replyText = '';
+
+    // ------------------------------------------------------------------------
+    // HANDLING GLOBAL INTENT: CANCEL (BISA DIJALANKAN KAPAN SAJA)
+    // ------------------------------------------------------------------------
+    if (intent === 'CANCEL') {
+      console.log(`👷 [Worker] Menerima permintaan pembatalan dari ${sender}`);
+      session.step = 'IDLE';
+      session.order = undefined;
+      replyText = `🤖 Baik Kak, pesanan Anda saat ini telah dibatalkan. Jika ingin memesan lagi di lain waktu, cukup ketik kembali menu pesanan Kakak ya. Terima kasih! 😊`;
+      await whatsappProvider.sendMessage(sender, replyText);
+      session.history.push({ role: 'assistant', content: replyText });
+      await sessionService.setSession(sender, session);
+      console.log(`👷 [Worker] Pesanan dibatalkan & sesi direset ke IDLE untuk ${sender}\n`);
+      return;
+    }
+
+    // ------------------------------------------------------------------------
+    // STATE MACHINE FLOW
+    // ------------------------------------------------------------------------
+
+    // A. STATE: AWAITING_NAME
+    if (session.step === 'AWAITING_NAME') {
+      // Jika pengguna mengajukan pertanyaan di tengah jalan alih-alih memberikan nama
       if (intent === 'INQUIRY') {
-        replyText = await answerInquiry(message, catalogContext);
+        replyText = await answerInquiry(message, catalogContext, session.history);
+        replyText = `${replyText}\n\n*Catatan:* Mohon infokan **Nama Lengkap Pembeli** terlebih dahulu ya Kak agar pesanan bisa kami catat. 😊`;
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+
+      // Simpan input sebagai nama
+      const inputName = message.trim();
+      if (session.order) {
+        session.order.nama_pembeli = inputName;
+        
+        // Cek kelengkapan alamat
+        const isAddressMissing = !session.order.alamat_pengiriman || 
+                                 session.order.alamat_pengiriman.trim() === '-' || 
+                                 session.order.alamat_pengiriman.trim() === '';
+                                 
+        if (isAddressMissing) {
+          session.step = 'AWAITING_ADDRESS';
+          replyText = `🤖 Terima kasih Kak *${inputName}*! Selanjutnya, mohon infokan **Alamat Pengiriman** Kakak ya agar kami bisa hitung ongkirnya. 😊`;
+        } else {
+          session.step = 'AWAITING_CONFIRMATION';
+          const detailPesananStr = session.order.pesanan
+            .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
+            .join('\n');
+          replyText = `🤖 *📋 REKAP PESANAN* \n\nBerikut rincian pesanan Kakak:\n\n- *Nama:* ${session.order.nama_pembeli}\n- *Nomor HP:* ${session.order.nomor_hp || cleanSenderPhone}\n- *Alamat:* ${session.order.alamat_pengiriman}\n\n*Item Pesanan:*\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${session.order.total_harga.toLocaleString('id-ID')}*\n\nApakah pesanan di atas sudah benar? (Ketik **Ya** untuk konfirmasi, atau ketik jika ada perubahan/tambahan). 😊`;
+        }
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+      }
+      return;
+    }
+
+    // B. STATE: AWAITING_ADDRESS
+    if (session.step === 'AWAITING_ADDRESS') {
+      // Jika pengguna malah bertanya di tengah jalan alih-alih memberikan alamat
+      if (intent === 'INQUIRY') {
+        replyText = await answerInquiry(message, catalogContext, session.history);
+        replyText = `${replyText}\n\n*Catatan:* Mohon infokan **Alamat Pengiriman** Kakak terlebih dahulu ya agar kami bisa hitung ongkirnya. 😊`;
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+
+      const inputAddress = message.trim();
+      if (session.order) {
+        session.order.alamat_pengiriman = inputAddress;
+        session.order.nomor_hp = session.order.nomor_hp || cleanSenderPhone;
+        
+        session.step = 'AWAITING_CONFIRMATION';
+        const detailPesananStr = session.order.pesanan
+          .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
+          .join('\n');
+        replyText = `🤖 *📋 REKAP PESANAN* \n\nBerikut rincian pesanan Kakak:\n\n- *Nama:* ${session.order.nama_pembeli}\n- *Nomor HP:* ${session.order.nomor_hp}\n- *Alamat:* ${session.order.alamat_pengiriman}\n\n*Item Pesanan:*\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${session.order.total_harga.toLocaleString('id-ID')}*\n\nApakah pesanan di atas sudah benar? (Ketik **Ya** untuk konfirmasi, atau ketik jika ada perubahan/tambahan). 😊`;
+        
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+      }
+      return;
+    }
+
+    // C. STATE: AWAITING_CONFIRMATION
+    if (session.step === 'AWAITING_CONFIRMATION') {
+      // Jika user mengonfirmasi
+      if (intent === 'CONFIRM') {
+        if (session.order) {
+          console.log(`📊 [Sheets Service] Menulis data ke Google Sheets...`);
+          await appendOrderToSheet(session.order);
+          
+          replyText = `🤖 *Nota Berhasil Direkap!* \n\nHalo Kak *${session.order.nama_pembeli}*, pesanan Anda telah resmi terdaftar di sistem toko kami. Admin kami akan segera menghubungi nomor Kakak untuk proses pembayaran dan pengiriman. Terima kasih telah berbelanja! 🙏😊`;
+          
+          await whatsappProvider.sendMessage(sender, replyText);
+          session.history.push({ role: 'assistant', content: replyText });
+          
+          // Bersihkan pesanan dan kembalikan state ke IDLE
+          session.step = 'IDLE';
+          session.order = undefined;
+          await sessionService.setSession(sender, session);
+          console.log(`👷 [Worker] Transaksi selesai & ditulis ke Google Sheets untuk ${sender}`);
+        }
+        return;
+      }
+      
+      // Jika user bermaksud menambah atau mengubah item pesanan
+      if (intent === 'ORDER') {
+        console.log(`👷 [Worker] Mendeteksi perubahan/tambahan pesanan dalam state AWAITING_CONFIRMATION`);
+        const updatedOrder = await extractOrderFromChat(message, catalogContext, session.history, session.order);
+        
+        if (updatedOrder && updatedOrder.pesanan && updatedOrder.pesanan.length > 0) {
+          session.order = updatedOrder;
+          
+          // Tampilkan rekap terbaru
+          const detailPesananStr = session.order.pesanan
+            .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
+            .join('\n');
+          replyText = `🤖 *📋 REKAP PESANAN (DIPERBARUI)* \n\nBerikut rincian pesanan terbaru Kakak:\n\n- *Nama:* ${session.order.nama_pembeli || 'Pelanggan'}\n- *Nomor HP:* ${session.order.nomor_hp || cleanSenderPhone}\n- *Alamat:* ${session.order.alamat_pengiriman || '-'}\n\n*Item Pesanan:*\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${session.order.total_harga.toLocaleString('id-ID')}*\n\nApakah pesanan di atas sudah benar? (Ketik **Ya** untuk konfirmasi, atau ketik jika ada perubahan/tambahan). 😊`;
+        } else {
+          replyText = `🤖 Maaf Kak, perubahan pesanan tidak valid atau produk tidak cocok dengan menu kami. Silakan ketik kembali menu tambahan yang diinginkan sesuai katalog aktif.`;
+        }
+        
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+
+      // Jika user menanyakan hal lain (Inquiry)
+      if (intent === 'INQUIRY') {
+        replyText = await answerInquiry(message, catalogContext, session.history);
+        replyText = `${replyText}\n\n*Catatan:* Konfirmasi pesanan Kakak di atas masih menggantung. Apakah rincian pesanan sudah benar? (Ketik **Ya** jika benar, atau ketik tambahan Anda). 😊`;
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+    }
+
+    // D. STATE: IDLE (TIDAK ADA PESANAN AKTIF)
+    if (session.step === 'IDLE') {
+      if (intent === 'ORDER') {
+        console.log(`👷 [Worker] Memproses pesanan baru...`);
+        const extractedOrder = await extractOrderFromChat(message, catalogContext, session.history);
+        
+        if (!extractedOrder.pesanan || extractedOrder.pesanan.length === 0) {
+          console.log(`⚠️ [Worker] Pembeli berniat memesan tetapi tidak ada item yang cocok dengan katalog.`);
+          replyText = `🤖 Halo Kak! Kami mendeteksi Kakak ingin melakukan pemesanan, tetapi produk yang dipesan belum tersedia atau tidak cocok dengan menu aktif kami.\n\n*Berikut Menu yang Tersedia:* \n${catalogContext}\n\nSilakan ketik ulang pesanan Kakak sesuai menu di atas ya! Terima kasih! 😊`;
+          await whatsappProvider.sendMessage(sender, replyText);
+          session.history.push({ role: 'assistant', content: replyText });
+          await sessionService.setSession(sender, session);
+          return;
+        }
+
+        // Auto-fill nomor HP
+        extractedOrder.nomor_hp = extractedOrder.nomor_hp || cleanSenderPhone;
+        session.order = extractedOrder;
+
+        // Tentukan step berikutnya berdasarkan kelengkapan parameter
+        const isNameMissing = !extractedOrder.nama_pembeli || 
+                              extractedOrder.nama_pembeli.trim() === '-' || 
+                              extractedOrder.nama_pembeli.trim() === '';
+                              
+        const isAddressMissing = !extractedOrder.alamat_pengiriman || 
+                                 extractedOrder.alamat_pengiriman.trim() === '-' || 
+                                 extractedOrder.alamat_pengiriman.trim() === '';
+
+        if (isNameMissing) {
+          session.step = 'AWAITING_NAME';
+          replyText = `🤖 Terima kasih pesanan Kakak! Mohon infokan **Nama Lengkap Pembeli** Kakak ya agar pesanan bisa kami catat dengan benar. 😊`;
+        } else if (isAddressMissing) {
+          session.step = 'AWAITING_ADDRESS';
+          replyText = `🤖 Terima kasih Kak *${extractedOrder.nama_pembeli}*! Mohon infokan **Alamat Pengiriman** Kakak ya agar pesanan bisa kami rekap dan hitung ongkirnya. 😊`;
+        } else {
+          session.step = 'AWAITING_CONFIRMATION';
+          const detailPesananStr = extractedOrder.pesanan
+            .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
+            .join('\n');
+          replyText = `🤖 *📋 REKAP PESANAN* \n\nBerikut rincian pesanan Kakak:\n\n- *Nama:* ${extractedOrder.nama_pembeli}\n- *Nomor HP:* ${extractedOrder.nomor_hp}\n- *Alamat:* ${extractedOrder.alamat_pengiriman}\n\n*Item Pesanan:*\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${extractedOrder.total_harga.toLocaleString('id-ID')}*\n\nApakah pesanan di atas sudah benar? (Ketik **Ya** untuk konfirmasi, atau ketik jika ada perubahan/tambahan). 😊`;
+        }
+        
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+
+      // Handling INQUIRY
+      if (intent === 'INQUIRY') {
+        replyText = await answerInquiry(message, catalogContext, session.history);
         replyText = `🤖 ${replyText}`;
-      } else if (intent === 'COMPLAINT') {
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
+      }
+
+      // Handling COMPLAINT
+      if (intent === 'COMPLAINT') {
         replyText = `🤖 Halo Kak! Terima kasih atas masukannya. Keluhan Kakak telah kami catat di sistem. Admin toko kami akan segera membalas chat Kakak secara manual secepat mungkin ya. Mohon maaf atas ketidaknyamanannya! 🙏`;
-      } else {
-        replyText = `🤖 Halo Kak! Selamat datang di Toko Kami. 😊\n\nAda yang bisa kami bantu? Kakak bisa menanyakan daftar menu/harga, atau bisa langsung mengetikkan detail pesanan Kakak untuk direkap otomatis.\n\n*Contoh Format Pesanan:*\n_\"Pesen sate kambing 2 porsi dan es teh manis 1 ya kak\"_`;
+        await whatsappProvider.sendMessage(sender, replyText);
+        session.history.push({ role: 'assistant', content: replyText });
+        await sessionService.setSession(sender, session);
+        return;
       }
 
+      // Default (OTHER / Greetings)
+      replyText = `🤖 Halo Kak! Selamat datang di Toko Kami. 😊\n\nAda yang bisa kami bantu? Kakak bisa menanyakan daftar menu/harga, atau bisa langsung mengetikkan detail pesanan Kakak untuk direkap otomatis.\n\n*Contoh Format Pesanan:*\n_\"Pesen sate kambing 2 porsi dan es teh manis 1 ya kak\"_`;
       await whatsappProvider.sendMessage(sender, replyText);
-      console.log(`👷 [Worker] Selesai memproses job #${job.id} (Pesan non-order dilewati untuk Google Sheets).\n`);
+      session.history.push({ role: 'assistant', content: replyText });
+      await sessionService.setSession(sender, session);
       return;
     }
-
-    // Jika niat adalah ORDER
-    console.log(`👷 [Worker] Memproses pesanan. Menganalisis detail pesanan terhadap katalog...`);
-    const extractedOrder = await extractOrderFromChat(message, catalogContext);
-    
-    console.log(`👷 [Worker] Hasil Rekap AI (Structured JSON):`);
-    console.log(JSON.stringify(extractedOrder, null, 2));
-
-    // Validasi: Jika pelanggan berniat memesan tapi tidak ada produk yang cocok
-    if (!extractedOrder.pesanan || extractedOrder.pesanan.length === 0) {
-      console.log(`⚠️ [Worker] Pembeli berniat memesan tetapi tidak ada item yang cocok dengan katalog.`);
-      const replyText = `🤖 Halo Kak! Kami mendeteksi Kakak ingin melakukan pemesanan, tetapi produk yang dipesan belum tersedia atau tidak cocok dengan menu aktif kami.\n\n*Berikut Menu yang Tersedia:* \n${catalogContext}\n\nSilakan ketik ulang pesanan Kakak sesuai menu di atas ya! Terima kasih! 😊`;
-      await whatsappProvider.sendMessage(sender, replyText);
-      console.log(`👷 [Worker] Selesai memproses job #${job.id} (Batal menulis karena produk tidak cocok).\n`);
-      return;
-    }
-    
-    // Auto-fill nomor HP pengirim
-    extractedOrder.nomor_hp = extractedOrder.nomor_hp || cleanSenderPhone;
-
-    // ------------------------------------------------------------------------
-    // VALIDASI PARAMETER WAJIB (NAMA & ALAMAT) - MULTI-TURN FLOW
-    // ------------------------------------------------------------------------
-    const isNameMissing = !extractedOrder.nama_pembeli || 
-                          extractedOrder.nama_pembeli.trim() === '-' || 
-                          extractedOrder.nama_pembeli.trim() === '';
-                          
-    const isAddressMissing = !extractedOrder.alamat_pengiriman || 
-                             extractedOrder.alamat_pengiriman.trim() === '-' || 
-                             extractedOrder.alamat_pengiriman.trim() === '';
-
-    if (isNameMissing) {
-      // Masuk ke sesi AWAITING_NAME
-      console.log(`👷 [Worker] Nama pembeli kosong. Mengaktifkan sesi AWAITING_NAME untuk ${sender}`);
-      await sessionService.setSession(sender, { step: 'AWAITING_NAME', order: extractedOrder });
-      
-      const replyText = `🤖 Terima kasih pesanan Kakak! Mohon infokan **Nama Lengkap Pembeli** Kakak ya agar pesanan bisa kami catat dengan benar. 😊`;
-      await whatsappProvider.sendMessage(sender, replyText);
-      console.log(`👷 [Worker] Selesai memproses job #${job.id} (Menunggu klarifikasi nama).\n`);
-      return;
-    }
-
-    if (isAddressMissing) {
-      // Masuk ke sesi AWAITING_ADDRESS
-      console.log(`👷 [Worker] Alamat pengiriman kosong. Mengaktifkan sesi AWAITING_ADDRESS untuk ${sender}`);
-      await sessionService.setSession(sender, { step: 'AWAITING_ADDRESS', order: extractedOrder });
-      
-      const replyText = `🤖 Terima kasih pesanan Kakak! Mohon infokan **Alamat Pengiriman** Kakak ya agar pesanan bisa kami rekap dan hitung ongkirnya. 😊`;
-      await whatsappProvider.sendMessage(sender, replyText);
-      console.log(`👷 [Worker] Selesai memproses job #${job.id} (Menunggu klarifikasi alamat).\n`);
-      return;
-    }
-
-    // Jika seluruh data valid dan lengkap, langsung tulis ke Google Sheets
-    await appendOrderToSheet(extractedOrder);
-
-    // Kirimkan pesan rincian nota belanja otomatis ke nomor pengirim
-    try {
-      console.log(`💬 [Worker] Mengirim nota konfirmasi belanja otomatis ke ${sender}...`);
-      const pembeli = extractedOrder.nama_pembeli || 'Pelanggan';
-      const detailPesananStr = extractedOrder.pesanan
-        .map((p) => `- *${p.nama_produk}* (x${p.jumlah}): Rp${p.subtotal.toLocaleString('id-ID')}`)
-        .join('\n');
-      
-      let replyText = `🤖 *📋 NOTA PESANAN OTOMATIS* \n\nHalo Kak *${pembeli}*! Pesanan Kakak telah berhasil direkap otomatis ke Google Sheets toko kami:\n\n${detailPesananStr}\n\n*💰 Total Tagihan:* *Rp${extractedOrder.total_harga.toLocaleString('id-ID')}*\n`;
-      if (extractedOrder.alamat_pengiriman) {
-        replyText += `*📍 Alamat Pengiriman:* ${extractedOrder.alamat_pengiriman}\n`;
-      }
-      replyText += `\nTerima kasih telah berbelanja! Admin kami akan segera menghubungi Kakak untuk konfirmasi pembayaran. 😊`;
-      
-      await whatsappProvider.sendMessage(sender, replyText);
-      console.log(`✅ [Worker] Nota belanja sukses terkirim ke ${sender}.`);
-    } catch (replyError: any) {
-      console.error(`❌ [Worker] Gagal mengirim nota belanja ke ${sender}:`, replyError.message || replyError);
-    }
-    
-    console.log(`👷 [Worker] Analisis AI & sinkronisasi Google Sheets selesai untuk job #${job.id}.\n`);
   },
   {
     connection: redisConnection,
