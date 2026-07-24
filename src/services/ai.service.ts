@@ -139,11 +139,12 @@ Tugasmu:
    - subtotal: Hasil kali dari jumlah dan harga_satuan (harus berupa angka/number).
 4. Hitung total_harga: Jumlah akumulasi dari seluruh subtotal pesanan (harus berupa angka/number).
 5. Jika pembeli memesan sesuatu yang sama sekali tidak ada di Katalog, abaikan item tersebut dan jangan masukkan ke dalam array 'pesanan'.
+6. JIKA di dalam chat pengirim TIDAK menyebutkan menu/produk yang ingin dipesan secara jelas (atau hanya berisi teks tambahan seperti "ada tambahan lagi", "tambah lagi kak" tanpa detail menu), maka kamu WAJIB mengembalikan array 'pesanan' kosong [] dan total_harga 0. JANGAN PERNAH mengarang (halusinasi) nama produk, nama pembeli, nomor HP, atau alamat pengiriman jika informasi tersebut tidak ada pada chat pengirim.
 
 Struktur JSON yang wajib kamu kembalikan:
 - nama_pembeli (string, kosongkan "" jika tidak ada)
 - nomor_hp (string, kosongkan "" jika tidak ada)
-- pesanan (array of object, masing-masing memiliki key: 'nama_produk', 'jumlah', 'harga_satuan', 'subtotal')
+- pesanan (array of object, masing-masing memiliki key: 'nama_produk', 'jumlah', 'harga_satuan', 'subtotal', kosongkan [] jika tidak ada produk cocok)
 - total_harga (number, jumlah dari seluruh subtotal)
 - alamat_pengiriman (string, kosongkan "" jika tidak ada)
 

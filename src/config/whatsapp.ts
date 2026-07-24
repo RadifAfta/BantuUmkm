@@ -7,15 +7,21 @@ import { addChatToQueue } from '../queue/whatsapp.queue';
 // LocalAuth akan menyimpan data sesi di folder lokal '.wwebjs_auth/' agar tidak perlu scan QR lagi
 export const client = new Client({
   authStrategy: new LocalAuth(),
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
   puppeteer: {
+    headless: false, // Set ke false agar kita bisa melihat window browser untuk debugging
     handleSIGINT: false, // Penting agar Puppeteer menutup browser dengan bersih saat server berhenti
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled', // Menyembunyikan tanda-tanda otomatisasi (bot) Puppeteer
-      '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36', // Memakai User Agent browser Chrome asli & modern
     ],
   },
+});
+
+// Event Listener 'loading_screen': Menampilkan progres pemuatan halaman WhatsApp Web
+client.on('loading_screen', (percent: any, message: string) => {
+  console.log(`📡 [WhatsApp Bot] Loading screen: ${percent}% - ${message}`);
 });
 
 // Event Listener 'qr': Menampilkan QR Code langsung di dalam console/terminal server
